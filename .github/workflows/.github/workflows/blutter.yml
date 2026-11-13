@@ -1,0 +1,98 @@
+name: Blutter Dart AOT Reverse
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'libapp.so'
+
+jobs:
+  blutter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ git build-essential python3
+
+      - name: Clone blutter and show full structure
+        run: |
+          git clone --depth=1 https://github.com/worawit/blutter.git
+          echo "=== blutter root ==="
+          ls -la blutter/
+          echo "=== ALL files ==="
+          find blutter -type f | head -50
+
+      - name: Try building from blutter root
+        run: |
+          cd blutter
+          ls -la
+          # Check if there's a CMakeLists.txt anywhere
+          find . -name "CMakeLists.txt"
+          # Check for any build scripts
+          find . -name "*.py" -o -name "*.sh" -o -name "Makefile" -o -name "build*" | head -20
+
+      - name: Try building with CMake from root
+        run: |
+          cd blutter
+          if [ -f "CMakeLists.txt" ]; then
+            echo "Found CMakeLists.txt in root"
+            mkdir -p build && cd build
+            cmake .. 2>&1
+            make -j$(nproc) 2>&1
+          else
+            echo "No CMakeLists.txt in root, checking subdirs"
+            for d in */; do
+              if [ -f "${d}CMakeLists.txt" ]; then
+                echo "Found in $d"
+                cd "$d"
+                mkdir -p build && cd build
+                cmake .. 2>&1
+                make -j$(nproc) 2>&1
+                break
+              fi
+            done
+          fi
+
+      - name: Verify blutter binary
+        run: |
+          cd blutter
+          # Find the built binary
+          BLUTTER_BIN=$(find . -name "blutter" -type f -executable 2>/dev/null | head -1)
+          if [ -n "$BLUTTER_BIN" ]; then
+            echo "Found blutter at: $BLUTTER_BIN"
+            cd $(dirname "$BLUTTER_BIN")
+            file blutter
+            ./blutter --help 2>&1 || true
+            # Run on libapp.so
+            ./blutter ../../../libapp.so > ../../../libapp.dart 2>&1
+            echo "Exit code: $?"
+          else
+            echo "ERROR: blutter binary not found!"
+            find . -type f -executable | head -20
+          fi
+
+      - name: Check output
+        run: |
+          if [ -f libapp.dart ]; then
+            ls -lh libapp.dart
+            head -100 libapp.dart
+            echo "---"
+            tail -20 libapp.dart
+          else
+            echo "libapp.dart not found in root"
+            find . -name "libapp.dart" 2>/dev/null
+          fi
+
+      - name: Upload Dart output
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: libapp-dart
+          path: |
+            libapp.dart
+            blutter/**/libapp.dart
+          retention-days: 7
