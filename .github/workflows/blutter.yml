@@ -13,59 +13,41 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Dart SDK
-        uses: dart-lang/setup-dart@v1
-        with:
-          sdk: 'stable'
-
-      - name: Install dependencies
+      - name: Install FULL Dart SDK (with VM libraries)
+        shell: bash
         run: |
+          # Install from official Dart repository - includes VM libraries
           sudo apt-get update
-          sudo apt-get install -y cmake g++ git build-essential python3
+          sudo apt-get install -y apt-transport-https curl gnupg
+          curl -fsSL https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo gpg --dearmor -o /usr/share/keyrings/dart.gpg
+          echo 'deb [signed-by=/usr/share/keyrings/dart.gpg] https://storage.googleapis.com/download.dartlang.org/linux/debian stable main' | sudo tee /etc/apt/sources.list.d/dart_stable.list
+          sudo apt-get update
+          sudo apt-get install -y dart cmake g++ git build-essential python3
+          
+          # Verify VM libraries exist
+          echo "=== Checking for VM libraries ==="
+          find /usr/lib/dart -name "*dartvm*" -o -name "libdart*" 2>/dev/null | head -20
+          ls -la /usr/lib/dart/ 2>/dev/null || true
 
-      - name: Clone blutter and show full structure
+      - name: Clone blutter
         shell: bash
         run: |
           git clone --depth=1 https://github.com/worawit/blutter.git
           echo "=== blutter root ==="
           ls -la blutter/
-          echo "=== ALL files ==="
-          find blutter -type f | head -50
 
-      - name: Find correct DARTLIB
-        shell: bash
-        run: |
-          # Find Dart SDK and dartvm library
-          DART_BIN=$(which dart)
-          DART_SDK=$(dirname $(dirname "$DART_BIN"))
-          echo "DART SDK: $DART_SDK"
-          
-          # Look for dartvm library
-          find "$DART_SDK" -name "*dartvm*" -type f 2>/dev/null | head -20
-          find "$DART_SDK" -name "libdart*" -type f 2>/dev/null | head -20
-          
-          # Check typical locations
-          ls -la "$DART_SDK/lib/" 2>/dev/null || true
-          ls -la "$DART_SDK/lib/dartvm/" 2>/dev/null || true
-
-      - name: Build blutter with correct DARTLIB
+      - name: Build blutter
         shell: bash
         run: |
           cd blutter
           
-          # Find the actual dartvm library directory
-          DART_BIN=$(which dart)
-          DART_SDK=$(dirname $(dirname "$DART_BIN"))
-          
-          # Try multiple possible locations for dartvm
+          # Find dartvm library directory
           DARTLIB=""
           for p in \
-            "$DART_SDK/lib/dartvm" \
-            "$DART_SDK/lib" \
-            "$DART_SDK" \
             "/usr/lib/dart" \
-            "/usr/local/lib/dart"; do
-            if [ -d "$p" ] && (ls "$p"/libdartvm*.so 2>/dev/null || ls "$p"/dartvm*.so 2>/dev/null || ls "$p"/libdart*.so 2>/dev/null); then
+            "/usr/lib/dart/dartvm" \
+            "/usr/lib/dartvm"; do
+            if [ -d "$p" ] && (ls "$p"/libdartvm*.so 2>/dev/null || ls "$p"/dartvm*.so 2>/dev/null); then
               DARTLIB="$p"
               echo "Found dartvm at: $DARTLIB"
               break
@@ -74,22 +56,21 @@ jobs:
           
           if [ -z "$DARTLIB" ]; then
             echo "ERROR: dartvm not found!"
-            find "$DART_SDK" -name "*dartvm*" -o -name "libdart*" 2>/dev/null | head -20
+            find /usr -name "*dartvm*" -o -name "libdartvm*" 2>/dev/null | head -20
             exit 1
           fi
           
           echo "Using DARTLIB: $DARTLIB"
+          ls -la "$DARTLIB"
           
+          # Build
           if [ -f "CMakeLists.txt" ]; then
-            echo "Found CMakeLists.txt in root"
             mkdir -p build && cd build
             cmake -DDARTLIB="$DARTLIB" .. 2>&1
             make -j$(nproc) 2>&1
           else
-            echo "No CMakeLists.txt in root, checking subdirs"
             for d in */; do
               if [ -f "${d}CMakeLists.txt" ]; then
-                echo "Found in $d"
                 cd "$d"
                 mkdir -p build && cd build
                 cmake -DDARTLIB="$DARTLIB" .. 2>&1
@@ -103,18 +84,15 @@ jobs:
         shell: bash
         run: |
           cd blutter
-          # Find the built binary
           BLUTTER_BIN=$(find . -name "blutter" -type f -executable 2>/dev/null | head -1)
           if [ -n "$BLUTTER_BIN" ]; then
             echo "Found blutter at: $BLUTTER_BIN"
             cd $(dirname "$BLUTTER_BIN")
             file blutter
             ./blutter --help 2>&1 || true
-            # Run on libapp.so
             echo "Running blutter on libapp.so..."
             ./blutter ../../../libapp.so
             echo "Exit code: $?"
-            # Check where output went
             ls -la ../../../libapp.dart 2>/dev/null || echo "Not in repo root"
             find ../../../ -name "libapp.dart" 2>/dev/null
             find . -name "libapp.dart" 2>/dev/null
@@ -123,24 +101,19 @@ jobs:
             find . -type f -executable | head -20
           fi
 
-      - name: Check output everywhere
+      - name: Find and copy output
         shell: bash
         run: |
           echo "=== Searching for libapp.dart ==="
           find . -name "libapp.dart" 2>/dev/null
           find /home/runner/work -name "libapp.dart" 2>/dev/null
-          ls -la libapp.dart 2>/dev/null || echo "Not in current dir"
-
-      - name: Copy to known location
-        shell: bash
-        run: |
-          # Copy wherever it is to repo root
+          
           FOUND=$(find . -name "libapp.dart" 2>/dev/null | head -1)
           if [ -n "$FOUND" ]; then
             cp "$FOUND" ./libapp.dart
-            echo "Copied from $FOUND to ./libapp.dart"
+            echo "Copied from $FOUND"
           else
-            echo "libapp.dart not found anywhere"
+            echo "libapp.dart not found"
           fi
           ls -la ./libapp.dart 2>/dev/null
 
@@ -150,8 +123,6 @@ jobs:
           if [ -f libapp.dart ]; then
             ls -lh libapp.dart
             head -100 libapp.dart
-            echo "---"
-            tail -20 libapp.dart
           else
             echo "libapp.dart not found in root"
           fi
