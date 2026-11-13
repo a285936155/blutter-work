@@ -32,19 +32,58 @@ jobs:
           echo "=== ALL files ==="
           find blutter -type f | head -50
 
-      - name: Build blutter with Dart SDK
+      - name: Find correct DARTLIB
+        shell: bash
+        run: |
+          # Find Dart SDK and dartvm library
+          DART_BIN=$(which dart)
+          DART_SDK=$(dirname $(dirname "$DART_BIN"))
+          echo "DART SDK: $DART_SDK"
+          
+          # Look for dartvm library
+          find "$DART_SDK" -name "*dartvm*" -type f 2>/dev/null | head -20
+          find "$DART_SDK" -name "libdart*" -type f 2>/dev/null | head -20
+          
+          # Check typical locations
+          ls -la "$DART_SDK/lib/" 2>/dev/null || true
+          ls -la "$DART_SDK/lib/dartvm/" 2>/dev/null || true
+
+      - name: Build blutter with correct DARTLIB
         shell: bash
         run: |
           cd blutter
-          # Find DARTLIB - Dart SDK library path
-          DARTLIB=$(dirname $(dirname $(which dart)))
-          echo "DART SDK at: $DARTLIB"
-          echo "DARTLIB (lib dir): $DARTLIB/lib"
+          
+          # Find the actual dartvm library directory
+          DART_BIN=$(which dart)
+          DART_SDK=$(dirname $(dirname "$DART_BIN"))
+          
+          # Try multiple possible locations for dartvm
+          DARTLIB=""
+          for p in \
+            "$DART_SDK/lib/dartvm" \
+            "$DART_SDK/lib" \
+            "$DART_SDK" \
+            "/usr/lib/dart" \
+            "/usr/local/lib/dart"; do
+            if [ -d "$p" ] && (ls "$p"/libdartvm*.so 2>/dev/null || ls "$p"/dartvm*.so 2>/dev/null || ls "$p"/libdart*.so 2>/dev/null); then
+              DARTLIB="$p"
+              echo "Found dartvm at: $DARTLIB"
+              break
+            fi
+          done
+          
+          if [ -z "$DARTLIB" ]; then
+            echo "ERROR: dartvm not found!"
+            find "$DART_SDK" -name "*dartvm*" -o -name "libdart*" 2>/dev/null | head -20
+            exit 1
+          fi
+          
+          echo "Using DARTLIB: $DARTLIB"
           
           if [ -f "CMakeLists.txt" ]; then
             echo "Found CMakeLists.txt in root"
             mkdir -p build && cd build
-            cmake -DDARTLIB=$DARTLIB/lib .. 2>&1
+            cmake -DDARTLIB="$DARTLIB" .. 2>&1
             make -j$(nproc) 2>&1
           else
             echo "No CMakeLists.txt in root, checking subdirs"
@@ -53,7 +92,7 @@ jobs:
                 echo "Found in $d"
                 cd "$d"
                 mkdir -p build && cd build
-                cmake -DDARTLIB=$DARTLIB/lib .. 2>&1
+                cmake -DDARTLIB="$DARTLIB" .. 2>&1
                 make -j$(nproc) 2>&1
                 break
               fi
@@ -71,7 +110,7 @@ jobs:
             cd $(dirname "$BLUTTER_BIN")
             file blutter
             ./blutter --help 2>&1 || true
-            # Run on libapp.so - output to fixed location
+            # Run on libapp.so
             echo "Running blutter on libapp.so..."
             ./blutter ../../../libapp.so
             echo "Exit code: $?"
