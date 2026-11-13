@@ -10,10 +10,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install FULL Dart SDK (with VM libraries)
+      - name: Install everything
         shell: bash
         run: |
           sudo apt-get update
@@ -22,125 +22,75 @@ jobs:
           echo 'deb [signed-by=/usr/share/keyrings/dart.gpg] https://storage.googleapis.com/download.dartlang.org/linux/debian stable main' | sudo tee /etc/apt/sources.list.d/dart_stable.list
           sudo apt-get update
           sudo apt-get install -y dart cmake g++ git build-essential python3
-          
-          # Verify VM libraries exist
-          echo "=== Checking for VM libraries ==="
-          find /usr/lib/dart -name "*dartvm*" -o -name "libdart*" 2>/dev/null | head -30
-          ls -la /usr/lib/dart/ 2>/dev/null || true
-          ls -la /usr/lib/dart/lib/ 2>/dev/null || true
 
-      - name: Clone blutter
+      - name: Clone and prepare
         shell: bash
         run: |
           git clone --depth=1 https://github.com/worawit/blutter.git
-          echo "=== blutter root ==="
-          ls -la blutter/
+          cd blutter
+          
+          # Find CMakeLists.txt
+          CMAKE_FILE=$(find . -name "CMakeLists.txt" | head -1)
+          echo "Using: $CMAKE_FILE"
+          cat "$CMAKE_FILE"
+          
+          # Find libdartvm.so
+          LIBDARTVM=$(find /usr -name "libdartvm*.so" 2>/dev/null | head -1)
+          echo "libdartvm.so: $LIBDARTVM"
+          LIBDIR=$(dirname "$LIBDARTVM")
+          
+          # Create /usr/lib/dartvm with symlinks
+          DARTLIB="/usr/lib/dartvm"
+          sudo mkdir -p "$DARTLIB"
+          sudo ln -sf "$LIBDIR"/libdartvm*.so "$DARTLIB"/ 2>/dev/null
+          sudo ln -sf "$LIBDIR"/libdart*.so "$DARTLIB"/ 2>/dev/null
+          echo "DARTLIB=$DARTLIB"
+          ls -la "$DARTLIB"
 
-      - name: Explore blutter CMakeLists.txt
-        shell: bash
-        run: |
-          echo "=== Root CMakeLists.txt ==="
-          cat blutter/CMakeLists.txt 2>/dev/null | head -80
-          echo "=== Subdir CMakeLists.txt ==="
-          find blutter -name "CMakeLists.txt" -exec echo "=== {} ===" \; -exec cat {} \; 2>/dev/null | head -200
-
-      - name: Build blutter with correct DARTLIB
+      - name: Build blutter
         shell: bash
         run: |
           cd blutter
-          
-          # The CMakeLists.txt expects DARTLIB to be a directory named 'dartvm*'
-          # containing the VM libraries. Let's find where libdartvm.so actually is.
-          echo "=== Searching for libdartvm.so ==="
-          find /usr -name "libdartvm*.so" 2>/dev/null
-          
-          # Also check what the CMakeLists.txt actually checks
-          # It likely checks: if(NOT "${DARTLIB}" MATCHES "dartvm")
-          # So DARTLIB just needs to be a path ending with "dartvm"
-          
-          # Find the directory containing libdartvm.so
-          LIBDIR=$(dirname $(find /usr -name "libdartvm*.so" 2>/dev/null | head -1))
-          echo "libdartvm.so directory: $LIBDIR"
-          
-          # Create a dartvm-named directory if needed
-          if [[ "$LIBDIR" != */dartvm ]]; then
-            DARTLIB="/usr/lib/dartvm"
-            sudo mkdir -p "$DARTLIB"
-            sudo ln -sf "$LIBDIR"/libdartvm*.so "$DARTLIB"/ 2>/dev/null || true
-            sudo ln -sf "$LIBDIR"/libdart*.so "$DARTLIB"/ 2>/dev/null || true
-            echo "Created symlink directory: $DARTLIB"
-          else
-            DARTLIB="$LIBDIR"
-          fi
-          
-          echo "Using DARTLIB: $DARTLIB"
-          ls -la "$DARTLIB"
-          
-          # Build
-          if [ -f "CMakeLists.txt" ]; then
-            mkdir -p build && cd build
-            cmake -DDARTLIB="$DARTLIB" .. 2>&1
-            make -j$(nproc) 2>&1
-          else
-            for d in */; do
-              if [ -f "${d}CMakeLists.txt" ]; then
-                cd "$d"
-                mkdir -p build && cd build
-                cmake -DDARTLIB="$DARTLIB" .. 2>&1
-                make -j$(nproc) 2>&1
-                break
-              fi
-            done
-          fi
+          CMAKE_DIR=$(dirname $(find . -name "CMakeLists.txt" | head -1))
+          cd "$CMAKE_DIR"
+          mkdir -p build && cd build
+          cmake -DDARTLIB=/usr/lib/dartvm .. 2>&1
+          make -j$(nproc) 2>&1
 
-      - name: Verify blutter binary and run
+      - name: Run blutter
         shell: bash
         run: |
           cd blutter
           BLUTTER_BIN=$(find . -name "blutter" -type f -executable 2>/dev/null | head -1)
-          if [ -n "$BLUTTER_BIN" ]; then
-            echo "Found blutter at: $BLUTTER_BIN"
-            cd $(dirname "$BLUTTER_BIN")
-            file blutter
-            ./blutter --help 2>&1 || true
-            echo "Running blutter on libapp.so..."
-            ./blutter ../../../libapp.so
-            echo "Exit code: $?"
-            ls -la ../../../libapp.dart 2>/dev/null || echo "Not in repo root"
-            find ../../../ -name "libapp.dart" 2>/dev/null
-            find . -name "libapp.dart" 2>/dev/null
-          else
-            echo "ERROR: blutter binary not found!"
-            find . -type f -executable | head -20
+          if [ -z "$BLUTTER_BIN" ]; then
+            echo "ERROR: blutter not built"
+            find . -type f -executable 2>/dev/null | head -20
+            exit 1
           fi
+          echo "Found: $BLUTTER_BIN"
+          cd "$(dirname "$BLUTTER_BIN")"
+          ./blutter ../../../libapp.so > ../../../libapp.dart 2>&1
+          echo "Exit code: $?"
 
-      - name: Find and copy output
+      - name: Copy output to root
         shell: bash
         run: |
-          echo "=== Searching for libapp.dart ==="
-          find . -name "libapp.dart" 2>/dev/null
-          find /home/runner/work -name "libapp.dart" 2>/dev/null
-          
-          FOUND=$(find . -name "libapp.dart" 2>/dev/null | head -1)
+          FOUND=$(find /home/runner/work -name "libapp.dart" 2>/dev/null | head -1)
           if [ -n "$FOUND" ]; then
             cp "$FOUND" ./libapp.dart
-            echo "Copied from $FOUND"
-          else
-            echo "libapp.dart not found"
+            echo "Copied $FOUND"
           fi
           ls -la ./libapp.dart 2>/dev/null
 
-      - name: Check output
+      - name: Show preview
         shell: bash
         run: |
           if [ -f libapp.dart ]; then
-            ls -lh libapp.dart
             head -100 libapp.dart
-          else
-            echo "libapp.dart not found in root"
+            echo "--- Lines: $(wc -l < libapp.dart) ---"
           fi
 
-      - name: Upload Dart output
+      - name: Upload
         uses: actions/upload-artifact@v4
         if: always()
         with:
