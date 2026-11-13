@@ -1,0 +1,55 @@
+name: Blutter Dart AOT Reverse
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'libapp.so'
+
+jobs:
+  blutter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ git build-essential
+
+      - name: Clone and build blutter
+        run: |
+          git clone --depth=1 https://github.com/worawit/blutter.git
+          cd blutter
+          mkdir build && cd build
+          cmake .. 2>&1
+          make -j$(nproc) 2>&1
+
+      - name: Verify blutter binary
+        run: |
+          cd blutter/build
+          ls -lh blutter
+          file blutter
+          ./blutter --help 2>&1 || true
+
+      - name: Run blutter on libapp.so
+        run: |
+          cd blutter/build
+          ./blutter ../../libapp.so > ../../libapp.dart 2>&1
+          echo "Exit code: $?"
+
+      - name: Check output
+        run: |
+          ls -lh ../../libapp.dart
+          head -50 ../../libapp.dart
+          echo "---"
+          tail -20 ../../libapp.dart
+
+      - name: Upload Dart output
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: libapp-dart
+          path: libapp.dart
+          retention-days: 7
