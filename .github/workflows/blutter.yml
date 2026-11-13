@@ -16,7 +16,6 @@ jobs:
       - name: Install FULL Dart SDK (with VM libraries)
         shell: bash
         run: |
-          # Install from official Dart repository - includes VM libraries
           sudo apt-get update
           sudo apt-get install -y apt-transport-https curl gnupg
           curl -fsSL https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo gpg --dearmor -o /usr/share/keyrings/dart.gpg
@@ -26,8 +25,9 @@ jobs:
           
           # Verify VM libraries exist
           echo "=== Checking for VM libraries ==="
-          find /usr/lib/dart -name "*dartvm*" -o -name "libdart*" 2>/dev/null | head -20
+          find /usr/lib/dart -name "*dartvm*" -o -name "libdart*" 2>/dev/null | head -30
           ls -la /usr/lib/dart/ 2>/dev/null || true
+          ls -la /usr/lib/dart/lib/ 2>/dev/null || true
 
       - name: Clone blutter
         shell: bash
@@ -36,28 +36,41 @@ jobs:
           echo "=== blutter root ==="
           ls -la blutter/
 
-      - name: Build blutter
+      - name: Explore blutter CMakeLists.txt
+        shell: bash
+        run: |
+          echo "=== Root CMakeLists.txt ==="
+          cat blutter/CMakeLists.txt 2>/dev/null | head -80
+          echo "=== Subdir CMakeLists.txt ==="
+          find blutter -name "CMakeLists.txt" -exec echo "=== {} ===" \; -exec cat {} \; 2>/dev/null | head -200
+
+      - name: Build blutter with correct DARTLIB
         shell: bash
         run: |
           cd blutter
           
-          # Find dartvm library directory
-          DARTLIB=""
-          for p in \
-            "/usr/lib/dart" \
-            "/usr/lib/dart/dartvm" \
-            "/usr/lib/dartvm"; do
-            if [ -d "$p" ] && (ls "$p"/libdartvm*.so 2>/dev/null || ls "$p"/dartvm*.so 2>/dev/null); then
-              DARTLIB="$p"
-              echo "Found dartvm at: $DARTLIB"
-              break
-            fi
-          done
+          # The CMakeLists.txt expects DARTLIB to be a directory named 'dartvm*'
+          # containing the VM libraries. Let's find where libdartvm.so actually is.
+          echo "=== Searching for libdartvm.so ==="
+          find /usr -name "libdartvm*.so" 2>/dev/null
           
-          if [ -z "$DARTLIB" ]; then
-            echo "ERROR: dartvm not found!"
-            find /usr -name "*dartvm*" -o -name "libdartvm*" 2>/dev/null | head -20
-            exit 1
+          # Also check what the CMakeLists.txt actually checks
+          # It likely checks: if(NOT "${DARTLIB}" MATCHES "dartvm")
+          # So DARTLIB just needs to be a path ending with "dartvm"
+          
+          # Find the directory containing libdartvm.so
+          LIBDIR=$(dirname $(find /usr -name "libdartvm*.so" 2>/dev/null | head -1))
+          echo "libdartvm.so directory: $LIBDIR"
+          
+          # Create a dartvm-named directory if needed
+          if [[ "$LIBDIR" != */dartvm ]]; then
+            DARTLIB="/usr/lib/dartvm"
+            sudo mkdir -p "$DARTLIB"
+            sudo ln -sf "$LIBDIR"/libdartvm*.so "$DARTLIB"/ 2>/dev/null || true
+            sudo ln -sf "$LIBDIR"/libdart*.so "$DARTLIB"/ 2>/dev/null || true
+            echo "Created symlink directory: $DARTLIB"
+          else
+            DARTLIB="$LIBDIR"
           fi
           
           echo "Using DARTLIB: $DARTLIB"
