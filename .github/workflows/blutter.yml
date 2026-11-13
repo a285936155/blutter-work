@@ -60,7 +60,7 @@ jobs:
             done
           fi
 
-      - name: Verify blutter binary
+      - name: Verify blutter binary and run
         shell: bash
         run: |
           cd blutter
@@ -71,13 +71,39 @@ jobs:
             cd $(dirname "$BLUTTER_BIN")
             file blutter
             ./blutter --help 2>&1 || true
-            # Run on libapp.so
-            ./blutter ../../../libapp.so > ../../../libapp.dart 2>&1
+            # Run on libapp.so - output to fixed location
+            echo "Running blutter on libapp.so..."
+            ./blutter ../../../libapp.so
             echo "Exit code: $?"
+            # Check where output went
+            ls -la ../../../libapp.dart 2>/dev/null || echo "Not in repo root"
+            find ../../../ -name "libapp.dart" 2>/dev/null
+            find . -name "libapp.dart" 2>/dev/null
           else
             echo "ERROR: blutter binary not found!"
             find . -type f -executable | head -20
           fi
+
+      - name: Check output everywhere
+        shell: bash
+        run: |
+          echo "=== Searching for libapp.dart ==="
+          find . -name "libapp.dart" 2>/dev/null
+          find /home/runner/work -name "libapp.dart" 2>/dev/null
+          ls -la libapp.dart 2>/dev/null || echo "Not in current dir"
+
+      - name: Copy to known location
+        shell: bash
+        run: |
+          # Copy wherever it is to repo root
+          FOUND=$(find . -name "libapp.dart" 2>/dev/null | head -1)
+          if [ -n "$FOUND" ]; then
+            cp "$FOUND" ./libapp.dart
+            echo "Copied from $FOUND to ./libapp.dart"
+          else
+            echo "libapp.dart not found anywhere"
+          fi
+          ls -la ./libapp.dart 2>/dev/null
 
       - name: Check output
         shell: bash
@@ -89,7 +115,6 @@ jobs:
             tail -20 libapp.dart
           else
             echo "libapp.dart not found in root"
-            find . -name "libapp.dart" 2>/dev/null
           fi
 
       - name: Upload Dart output
@@ -97,7 +122,5 @@ jobs:
         if: always()
         with:
           name: libapp-dart
-          path: |
-            libapp.dart
-            blutter/**/libapp.dart
+          path: libapp.dart
           retention-days: 7
